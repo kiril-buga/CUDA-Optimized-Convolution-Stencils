@@ -1,0 +1,4 @@
+{
+    "files.autoSave": "afterDelay",
+    "makefile.configureOnOpen": true
+}
