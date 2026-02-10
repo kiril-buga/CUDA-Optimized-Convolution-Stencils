@@ -86,17 +86,6 @@ void conv2d_cuda_v2(
     int block_y = 16
 );
 
-// V3: Fused Gaussian blur + Sobel magnitude
-// Combines two operations to reduce memory traffic
-void conv2d_cuda_v3_fused_gaussian_sobel(
-    const float* d_input,
-    float* d_output,
-    int width,
-    int height,
-    int block_x = 16,
-    int block_y = 16
-);
-
 // Multi-GPU wrapper
 // Splits image by rows, processes on multiple GPUs, stitches result
 void conv2d_multi_gpu(

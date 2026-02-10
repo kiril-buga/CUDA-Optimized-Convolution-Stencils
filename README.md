@@ -1,6 +1,6 @@
 # CUDA-Optimized Convolution Stencils
 
-GPU-accelerated 2D convolution with three kernel versions of increasing optimization, plus a multi-GPU framework.
+GPU-accelerated 2D convolution with two kernel versions of increasing optimization, plus a multi-GPU framework.
 
 ## Prerequisites
 
@@ -41,7 +41,6 @@ Implements 2D image convolution (zero-padded) in four ways:
 | **CPU** | Sequential baseline, arbitrary kernel sizes (3x3, 5x5, 7x7) | `cpu_convolution.cpp` |
 | **GPU V1** | Naive - one thread per pixel, global memory reads | `cuda_convolution.cu` |
 | **GPU V2** | Tiled - shared memory with halo handling, constant memory kernel | `cuda_convolution.cu` |
-| **GPU V3** | Fused - Gaussian blur + Sobel magnitude in a single kernel | `cuda_convolution.cu` |
 | **Multi-GPU** | Splits image by rows with halo overlap, stitches on CPU | `cuda_convolution.cu` |
 
 ## Supported Filters
@@ -56,13 +55,13 @@ Defined in `filters.cpp`.
 
 All GPU kernels produce bit-identical output to the CPU baseline (error = 0.00):
 
-| Filter | V1 | V2 | V3 (fused) |
-|--------|----|----|------------|
-| Gaussian 3x3, 5x5, 7x7 | PASS | PASS | PASS |
-| Sobel X 3x3 | PASS | PASS | - |
-| Laplacian 3x3 | PASS | PASS | - |
-| Box blur 3x3, 5x5 | PASS | PASS | - |
-| Multi-GPU | PASS (0.00 error vs single GPU) | | |
+| Filter | V1 | V2 |
+|--------|----|----|
+| Gaussian 3x3, 5x5, 7x7 | PASS | PASS |
+| Sobel X 3x3 | PASS | PASS |
+| Laplacian 3x3 | PASS | PASS |
+| Box blur 3x3, 5x5 | PASS | PASS |
+| Multi-GPU | PASS (0.00 error vs single GPU) | |
 
 ### Image Size Sweep (Gaussian 3x3)
 
@@ -97,23 +96,13 @@ Larger kernels benefit more from shared memory tiling because each pixel reads m
 
 32x8 is optimal because the 32-wide rows match the warp size, giving perfectly coalesced memory access.
 
-### Fused vs Unfused (Gaussian + Sobel)
-
-| Size | Unfused (ms) | Fused V3 (ms) | Speedup |
-|------|-------------|---------------|---------|
-| 512x512 | 0.170 | 0.231 | 0.74x |
-| 1024x1024 | 0.641 | 0.906 | 0.71x |
-| 2048x2048 | 2.510 | 3.596 | 0.70x |
-
-The fused kernel eliminates intermediate global memory writes (1 kernel launch vs 3), but the current implementation uses a simple per-thread approach without shared memory. The unfused path uses the optimized V2 kernel, which is why it's faster here.
-
 ## Project Structure
 
 ```
 src/
 ├── main.cpp               # Benchmark harness and correctness tests
 ├── cpu_convolution.cpp/h  # CPU convolution (arbitrary kernel sizes)
-├── cuda_convolution.cu    # GPU kernels V1, V2, V3 + multi-GPU
+├── cuda_convolution.cu    # GPU kernels V1, V2 + multi-GPU
 ├── cuda_convolution.cuh   # CUDA interfaces, error checking, timer
 ├── filters.cpp/h          # Filter kernel definitions
 └── image_utils.h          # Synthetic image generators (noise, checkerboard, gradients)

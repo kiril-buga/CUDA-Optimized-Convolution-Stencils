@@ -94,32 +94,6 @@ double time_gpu_convolution_v2(
     return total_ms / iterations;
 }
 
-double time_gpu_convolution_v3(
-    const float* d_input,
-    float* d_output,
-    int width,
-    int height,
-    int block_x,
-    int block_y,
-    int iterations = 10
-) {
-    // Warmup
-    conv2d_cuda_v3_fused_gaussian_sobel(d_input, d_output, width, height, block_x, block_y);
-    cudaDeviceSynchronize();
-
-    CudaTimer timer;
-    double total_ms = 0.0;
-
-    for (int i = 0; i < iterations; ++i) {
-        timer.start();
-        conv2d_cuda_v3_fused_gaussian_sobel(d_input, d_output, width, height, block_x, block_y);
-        timer.stop();
-        total_ms += timer.elapsed_ms();
-    }
-
-    return total_ms / iterations;
-}
-
 #endif // CPU_ONLY
 
 void print_separator(const std::string& title = "") {
@@ -193,42 +167,6 @@ void run_correctness_tests() {
 #endif
     }
 
-#ifndef CPU_ONLY
-    // Test V3 fused kernel
-    std::cout << "\nTesting V3 (Fused Gaussian+Sobel):\n";
-
-    auto gauss_kernel = filters::gaussian_3x3();
-    auto sobel_x = filters::sobel_x_3x3();
-    auto sobel_y = filters::sobel_y_3x3();
-
-    // CPU reference: Gaussian then Sobel magnitude
-    std::vector<float> blurred, sobel_x_out, sobel_y_out, cpu_magnitude;
-    conv2d_cpu(input, blurred, width, height, gauss_kernel, 3);
-    conv2d_cpu(blurred, sobel_x_out, width, height, sobel_x, 3);
-    conv2d_cpu(blurred, sobel_y_out, width, height, sobel_y, 3);
-
-    cpu_magnitude.resize(width * height);
-    for (size_t i = 0; i < cpu_magnitude.size(); ++i) {
-        cpu_magnitude[i] = std::abs(sobel_x_out[i]) + std::abs(sobel_y_out[i]);
-    }
-
-    // GPU V3
-    float *d_input, *d_output;
-    CUDA_CHECK(cudaMalloc(&d_input, width * height * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_output, width * height * sizeof(float)));
-    CUDA_CHECK(cudaMemcpy(d_input, input.data(), width * height * sizeof(float), cudaMemcpyHostToDevice));
-
-    conv2d_cuda_v3_fused_gaussian_sobel(d_input, d_output, width, height);
-    gpu_output.resize(width * height);
-    CUDA_CHECK(cudaMemcpy(gpu_output.data(), d_output, width * height * sizeof(float), cudaMemcpyDeviceToHost));
-
-    float v3_error = image_utils::max_abs_error(cpu_magnitude, gpu_output);
-    std::cout << "  V3 fused error: " << std::scientific << std::setprecision(2) << v3_error
-              << (v3_error < 1e-4 ? "  [PASS]" : "  [FAIL]") << std::fixed << "\n";
-
-    CUDA_CHECK(cudaFree(d_input));
-    CUDA_CHECK(cudaFree(d_output));
-#endif
 }
 
 void run_benchmark_image_sizes() {
@@ -386,86 +324,6 @@ void run_benchmark_block_sizes() {
 #endif
 }
 
-void run_benchmark_fused_vs_unfused() {
-#ifndef CPU_ONLY
-    print_separator("BENCHMARK: Fused vs Unfused (Gaussian+Sobel)");
-
-    std::vector<int> sizes = {512, 1024, 2048};
-
-    std::cout << std::setw(10) << "Size"
-              << std::setw(14) << "Unfused (ms)"
-              << std::setw(14) << "Fused V3 (ms)"
-              << std::setw(12) << "Speedup"
-              << "\n";
-    std::cout << std::string(50, '-') << "\n";
-
-    for (int size : sizes) {
-        auto input = image_utils::random_noise(size, size);
-        auto gauss = filters::gaussian_3x3();
-        auto sobel_x = filters::sobel_x_3x3();
-        auto sobel_y = filters::sobel_y_3x3();
-
-        float *d_input, *d_temp, *d_sobel_x, *d_sobel_y, *d_output;
-        float *d_gauss, *d_sx, *d_sy;
-
-        CUDA_CHECK(cudaMalloc(&d_input, size * size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_temp, size * size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_sobel_x, size * size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_sobel_y, size * size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_output, size * size * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_gauss, 9 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_sx, 9 * sizeof(float)));
-        CUDA_CHECK(cudaMalloc(&d_sy, 9 * sizeof(float)));
-
-        CUDA_CHECK(cudaMemcpy(d_input, input.data(), size * size * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_gauss, gauss.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_sx, sobel_x.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
-        CUDA_CHECK(cudaMemcpy(d_sy, sobel_y.data(), 9 * sizeof(float), cudaMemcpyHostToDevice));
-
-        // Warmup
-        conv2d_cuda_v2(d_input, d_temp, size, size, d_gauss, 3);
-        conv2d_cuda_v2(d_temp, d_sobel_x, size, size, d_sx, 3);
-        cudaDeviceSynchronize();
-
-        // Time unfused version (3 kernel launches)
-        CudaTimer timer;
-        double unfused_time = 0;
-        const int iterations = 10;
-
-        for (int i = 0; i < iterations; ++i) {
-            timer.start();
-            conv2d_cuda_v2(d_input, d_temp, size, size, d_gauss, 3);
-            conv2d_cuda_v2(d_temp, d_sobel_x, size, size, d_sx, 3);
-            conv2d_cuda_v2(d_temp, d_sobel_y, size, size, d_sy, 3);
-            // Note: Magnitude computation would need another kernel, but we're measuring the convolutions
-            timer.stop();
-            unfused_time += timer.elapsed_ms();
-        }
-        unfused_time /= iterations;
-
-        // Time fused version
-        double fused_time = time_gpu_convolution_v3(d_input, d_output, size, size, 16, 16, iterations);
-
-        std::cout << std::setw(10) << (std::to_string(size) + "x" + std::to_string(size))
-                  << std::setw(14) << std::fixed << std::setprecision(3) << unfused_time
-                  << std::setw(14) << fused_time
-                  << std::setw(12) << std::setprecision(2) << (unfused_time / fused_time) << "x"
-                  << "\n";
-
-        CUDA_CHECK(cudaFree(d_input));
-        CUDA_CHECK(cudaFree(d_temp));
-        CUDA_CHECK(cudaFree(d_sobel_x));
-        CUDA_CHECK(cudaFree(d_sobel_y));
-        CUDA_CHECK(cudaFree(d_output));
-        CUDA_CHECK(cudaFree(d_gauss));
-        CUDA_CHECK(cudaFree(d_sx));
-        CUDA_CHECK(cudaFree(d_sy));
-    }
-#else
-    std::cout << "Fused benchmark requires CUDA\n";
-#endif
-}
-
 void run_multi_gpu_test() {
 #ifndef CPU_ONLY
     print_separator("MULTI-GPU TEST");
@@ -529,7 +387,6 @@ int main(int argc, char** argv) {
     run_benchmark_image_sizes();
     run_benchmark_kernel_sizes();
     run_benchmark_block_sizes();
-    run_benchmark_fused_vs_unfused();
     run_multi_gpu_test();
 
     print_separator("BENCHMARK COMPLETE");
