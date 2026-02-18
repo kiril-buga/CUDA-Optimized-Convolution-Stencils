@@ -1,0 +1,245 @@
+\chapter{Results}
+\label{chap:results}
+
+\section{Hardware and Software Environment}
+\label{sec:hardware}
+
+Benchmarks were run on two distinct GPU platforms to evaluate how architectural differences affect kernel performance.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+GPU & NVIDIA GeForce GTX 1050 Ti \\
+GPU Architecture & Pascal (\texttt{sm\_61}) \\
+CUDA Cores & 768 \\
+GPU Memory & 4~GB GDDR5 \\
+Memory Bandwidth & 112~GB/s \\
+Shared Memory per SM & 48~KB \\
+Streaming Multiprocessors & 6 \\
+\bottomrule
+\end{tabular}
+\caption{Environment~A: NVIDIA GeForce GTX 1050 Ti (Pascal)}
+\label{tab:hardware-1050ti}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+GPU & NVIDIA Tesla T4 \\
+GPU Architecture & Turing (\texttt{sm\_75}) \\
+CUDA Cores & 2560 \\
+GPU Memory & 16~GB GDDR6 \\
+Memory Bandwidth & 320~GB/s \\
+Shared Memory per SM & 64~KB \\
+Streaming Multiprocessors & 40 \\
+\bottomrule
+\end{tabular}
+\caption{Environment~B: NVIDIA Tesla T4 (Turing, Google Colab)}
+\label{tab:hardware-t4}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+CUDA Toolkit Version & 12.2 \\
+Operating System & Ubuntu 22.04 LTS \\
+Compiler (Host) & \texttt{gcc} 11.4.0 (C++20) \\
+Compiler (Device) & \texttt{nvcc} 12.2 (C++17) \\
+\bottomrule
+\end{tabular}
+\caption{Common software stack}
+\label{tab:hardware-software}
+\end{table}
+
+The T4 has approximately $3.3\times$ more CUDA cores, $2.9\times$ higher memory bandwidth, and $6.7\times$ more SMs than the GTX 1050 Ti, making it representative of a datacenter-class accelerator compared to a consumer desktop GPU.
+
+\section{Correctness Results}
+\label{sec:correctness-results}
+
+All GPU kernels produce bit-identical output to the CPU baseline (max absolute error = 0.00), as shown in Table~\ref{tab:correctness}.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{llcccl}
+\toprule
+\textbf{Filter} & \textbf{Size} & \textbf{V1} & \textbf{V1\_const} & \textbf{V2} & \textbf{Status} \\
+\midrule
+Gaussian & $3\times3$ & PASS & PASS & PASS & PASS \\
+Gaussian & $5\times5$ & PASS & PASS & PASS & PASS \\
+Gaussian & $7\times7$ & PASS & PASS & PASS & PASS \\
+Sobel X & $3\times3$ & PASS & PASS & PASS & PASS \\
+Laplacian & $3\times3$ & PASS & PASS & PASS & PASS \\
+Box Blur & $3\times3$ & PASS & PASS & PASS & PASS \\
+Box Blur & $5\times5$ & PASS & PASS & PASS & PASS \\
+\bottomrule
+\end{tabular}
+\caption{Correctness verification results across all GPU kernels and filter configurations}
+\label{tab:correctness}
+\end{table}
+
+All seven filter configurations pass correctness verification across all three GPU kernel versions, confirming that the constant memory and shared memory optimizations do not introduce numerical errors.
+
+\section{Image Size Sweep (Gaussian 3\texorpdfstring{$\times$}{x}3, 16\texorpdfstring{$\times$}{x}16 Blocks)}
+\label{sec:image-size-sweep}
+
+Tables~\ref{tab:image-size-1050ti} and~\ref{tab:image-size-t4} show how performance scales with image size on each platform.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lrrrrcc}
+\toprule
+\textbf{Image Size} & \textbf{CPU (ms)} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{Speedup V1} & \textbf{Speedup V2} \\
+\midrule
+$256\times256$ & 1.00 & 0.017 & 0.020 & 0.030 & 59$\times$ & 34$\times$ \\
+$512\times512$ & 3.99 & 0.073 & 0.072 & 0.103 & 54$\times$ & 39$\times$ \\
+$1024\times1024$ & 16.11 & 0.287 & 0.270 & 0.385 & 56$\times$ & 42$\times$ \\
+$2048\times2048$ & 65.99 & 1.132 & 1.047 & 1.519 & 58$\times$ & 43$\times$ \\
+$4096\times4096$ & 265.23 & 4.500 & 4.176 & 5.819 & 59$\times$ & 46$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Image size sweep --- GTX 1050 Ti (Gaussian $3\times3$, $16\times16$ blocks)}
+\label{tab:image-size-1050ti}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lrrrrcc}
+\toprule
+\textbf{Image Size} & \textbf{CPU (ms)} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{Speedup V1} & \textbf{Speedup V2} \\
+\midrule
+$256\times256$ & 0.90 & 0.014 & 0.017 & 0.020 & 64$\times$ & 44$\times$ \\
+$512\times512$ & 3.58 & 0.033 & 0.033 & 0.044 & 110$\times$ & 81$\times$ \\
+$1024\times1024$ & 14.66 & 0.102 & 0.100 & 0.123 & 143$\times$ & 120$\times$ \\
+$2048\times2048$ & 60.01 & 0.407 & 0.383 & 0.470 & 148$\times$ & 128$\times$ \\
+$4096\times4096$ & 257.72 & 1.853 & 1.707 & 2.158 & 139$\times$ & 119$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Image size sweep --- Tesla T4 (Gaussian $3\times3$, $16\times16$ blocks)}
+\label{tab:image-size-t4}
+\end{table}
+
+\section{Kernel Size Sweep (1024\texorpdfstring{$\times$}{x}1024 Image, 16\texorpdfstring{$\times$}{x}16 Blocks)}
+\label{sec:kernel-size-sweep}
+
+Tables~\ref{tab:kernel-size-1050ti} and~\ref{tab:kernel-size-t4} show the impact of convolution kernel size on performance.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lrrrrc}
+\toprule
+\textbf{Kernel Size} & \textbf{CPU (ms)} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{V2/V1} \\
+\midrule
+$3\times3$ & 16.29 & 0.274 & 0.260 & 0.356 & 0.77$\times$ \\
+$5\times5$ & 35.73 & 0.600 & 0.556 & 0.402 & 1.49$\times$ \\
+$7\times7$ & 67.68 & 0.968 & 0.862 & 0.510 & 1.90$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Kernel size sweep --- GTX 1050 Ti ($1024\times1024$ image, $16\times16$ blocks)}
+\label{tab:kernel-size-1050ti}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lrrrrc}
+\toprule
+\textbf{Kernel Size} & \textbf{CPU (ms)} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{V2/V1} \\
+\midrule
+$3\times3$ & 16.97 & 0.122 & 0.116 & 0.147 & 0.83$\times$ \\
+$5\times5$ & 34.99 & 0.249 & 0.216 & 0.222 & 1.12$\times$ \\
+$7\times7$ & 66.66 & 0.463 & 0.338 & 0.350 & 1.32$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Kernel size sweep --- Tesla T4 ($1024\times1024$ image, $16\times16$ blocks)}
+\label{tab:kernel-size-t4}
+\end{table}
+
+\section{Block Size Sweep (2048\texorpdfstring{$\times$}{x}2048, Gaussian 5\texorpdfstring{$\times$}{x}5)}
+\label{sec:block-size-sweep}
+
+Tables~\ref{tab:block-size-1050ti} and~\ref{tab:block-size-t4} show performance across different thread block configurations.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lcrrrr}
+\toprule
+\textbf{Block Config} & \textbf{Threads/Block} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{V2/V1} \\
+\midrule
+$8\times8$ & 64 & 2.555 & 2.292 & 1.558 & 1.64$\times$ \\
+$16\times16$ & 256 & 2.407 & 2.215 & 1.588 & 1.52$\times$ \\
+$32\times8$ & 256 & 2.305 & 2.047 & 1.418 & 1.63$\times$ \\
+$32\times16$ & 512 & 2.265 & 2.063 & 1.870 & 1.21$\times$ \\
+$32\times32$ & 1024 & 2.303 & 2.100 & 2.043 & 1.13$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Block size sweep --- GTX 1050 Ti ($2048\times2048$ image, Gaussian $5\times5$)}
+\label{tab:block-size-1050ti}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{lcrrrr}
+\toprule
+\textbf{Block Config} & \textbf{Threads/Block} & \textbf{V1 (ms)} & \textbf{V1c (ms)} & \textbf{V2 (ms)} & \textbf{V2/V1} \\
+\midrule
+$8\times8$ & 64 & 1.545 & 1.277 & 0.866 & 1.78$\times$ \\
+$16\times16$ & 256 & 0.980 & 0.849 & 0.846 & 1.16$\times$ \\
+$32\times8$ & 256 & 0.855 & 0.821 & 0.688 & 1.24$\times$ \\
+$32\times16$ & 512 & 0.903 & 0.861 & 0.789 & 1.14$\times$ \\
+$32\times32$ & 1024 & 0.973 & 0.886 & 0.898 & 1.08$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Block size sweep --- Tesla T4 ($2048\times2048$ image, Gaussian $5\times5$)}
+\label{tab:block-size-t4}
+\end{table}
+
+\FloatBarrier
+\section{Discussion of Results}
+\label{sec:discussion}
+
+\subsection{Cross-Platform Comparison}
+
+The T4 provides dramatically higher absolute performance than the GTX 1050 Ti across all benchmarks, as expected from its $3.3\times$ CUDA core count, $2.9\times$ memory bandwidth, and $6.7\times$ SM count advantages. At $4096\times4096$ with Gaussian $3\times3$, V1 runs in 1.853~ms on the T4 versus 4.500~ms on the GTX 1050 Ti---a $2.4\times$ raw speedup. The T4's advantage is even more pronounced in CPU-relative speedup: V1 achieves $139\times$ on the T4 versus $59\times$ on the GTX 1050 Ti at $4096\times4096$. This difference is partly due to the T4's Colab host CPU being slightly faster at the CPU baseline (257.72~ms vs 265.23~ms), but is dominated by the T4's superior GPU throughput.
+
+Interestingly, the relative benefit of V2 over V1 is smaller on the T4 than on the GTX 1050 Ti. For $7\times7$ kernels, V2/V1 is $1.90\times$ on the GTX 1050 Ti but only $1.32\times$ on the T4. The T4's larger L1/L2 caches and higher memory bandwidth reduce the penalty of V1's redundant global memory reads, diminishing the relative advantage of shared memory tiling. This suggests that as GPU architectures improve their cache hierarchies, explicit shared memory management becomes less critical---though still beneficial.
+
+\subsection{Image Size Scaling}
+
+On the GTX 1050 Ti, GPU kernels achieve $34$--$59\times$ speedup over the CPU baseline, with speedup growing as image size increases. At $256\times256$, the GPU is underutilized and kernel launch overhead is proportionally significant. By $4096\times4096$ (16M pixels), the GPU's parallelism is fully exploited and V1 achieves $59\times$ speedup.
+
+On the T4, the same trend holds but at much higher magnitudes: speedups range from $64\times$ at $256\times256$ to $148\times$ at $2048\times2048$ for V1. The T4's 40 SMs (versus 6 on the GTX 1050 Ti) can accommodate far more concurrent thread blocks, enabling it to saturate parallelism at larger image sizes more effectively. The slight speedup drop at $4096\times4096$ on the T4 ($139\times$ versus $148\times$ at $2048\times2048$) suggests that memory bandwidth becomes the bottleneck at the largest sizes.
+
+On both GPUs, V2 is consistently slower than V1 for this small $3\times3$ kernel because the shared memory tiling overhead exceeds the data reuse benefit when only 9 neighbor reads are needed per pixel.
+
+\subsection{V1\_const Performance}
+
+V1\_const consistently outperforms V1 on both platforms, demonstrating that placing filter weights in constant memory is a robust, architecture-independent optimization. On the GTX 1050 Ti, the improvement ranges from 5--12\%. On the T4, V1\_const provides a similar 2--8\% improvement for image size and block sweeps, but a more pronounced benefit for larger kernel sizes: at $7\times7$, V1\_const is 27\% faster than V1 on the T4 (0.338~ms vs 0.463~ms) compared to 11\% on the GTX 1050 Ti. The T4's larger constant cache may contribute to this increased benefit at larger kernel sizes.
+
+\subsection{Kernel Size Impact}
+
+The V2/V1 ratio reveals a critical crossover point on both platforms, though the crossover behavior differs:
+
+\begin{itemize}
+    \item \textbf{GTX 1050 Ti:} V2 is 23\% slower than V1 at $3\times3$ ($0.77\times$), pulls ahead at $5\times5$ ($1.49\times$), and reaches $1.90\times$ at $7\times7$.
+    \item \textbf{Tesla T4:} V2 is 17\% slower than V1 at $3\times3$ ($0.83\times$), barely ahead at $5\times5$ ($1.12\times$), and reaches $1.32\times$ at $7\times7$.
+\end{itemize}
+
+On both GPUs, shared memory tiling becomes increasingly valuable as kernel size grows. However, V2's relative advantage is consistently smaller on the T4 because its higher memory bandwidth and improved cache hierarchy reduce V1's memory bottleneck. The crossover point (where V2 first outperforms V1) occurs between $3\times3$ and $5\times5$ on both platforms, confirming that shared memory tiling is most impactful for kernels with 25 or more neighbor reads per pixel.
+
+\subsection{Block Configuration}
+
+On both GPUs, the $32\times8$ configuration achieves the best V2 performance: 1.418~ms on the GTX 1050 Ti and 0.688~ms on the T4. With 32 threads along the x-axis, each row of a thread block forms exactly one warp, ensuring perfectly coalesced memory access during the tile loading phase. The small tile height (8 rows) keeps shared memory usage low ($(32+4)\times(8+4) = 432$ floats for $5\times5$), allowing more concurrent blocks per SM.
+
+At the other extreme, $32\times32$ blocks (1024 threads) require a large shared memory tile ($(32+4)\times(32+4) = 1296$ floats), which limits concurrent blocks per SM. V2/V1 drops to $1.13\times$ on the GTX 1050 Ti and $1.08\times$ on the T4 at this configuration.
+
+The T4 shows greater sensitivity to block configuration for V1: performance ranges from 0.855~ms ($32\times8$) to 1.545~ms ($8\times8$), a $1.8\times$ spread. On the GTX 1050 Ti, V1's spread is only $1.13\times$ (2.305~ms to 2.555~ms). This suggests that the T4's larger SM count amplifies the occupancy penalty of suboptimal block sizes.
+
+V1\_const outperforms V1 at every block configuration on both platforms, confirming that constant memory caching is an orthogonal optimization that benefits regardless of thread block geometry or GPU architecture.

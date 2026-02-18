@@ -1,0 +1,87 @@
+\chapter{Background: Image Processing}
+\label{chap:imgproc}
+
+\section{2D Convolution}
+\label{sec:2d-convolution}
+
+2D convolution is a mathematical operation that combines an input image $I$ with a small matrix called a kernel (or filter) $K$ to produce an output image $O$ \parencite{gonzalezDigitalImageProcessing2018,szeliskiComputerVisionAlgorithms2022}. For each pixel in the output, the kernel is centered on the corresponding input pixel, element-wise products are computed between the kernel and the overlapping image region, and the results are summed:
+
+\begin{equation}
+O(x, y) = \sum_{k_x, k_y} I(x + k_x, y + k_y) \cdot K(k_x, k_y)
+\label{eq:convolution}
+\end{equation}
+
+The kernel slides across every pixel position in the image. Different kernel values produce different effects: smoothing, edge detection, sharpening, and more. All images in this project are single-channel (grayscale), stored as 1D arrays of \texttt{float} values in the range $[0, 1]$ using row-major order (\texttt{pixel = image[y * width + x]}).
+
+\section{Zero-Padding Boundary Handling}
+\label{sec:zero-padding}
+
+When the kernel overlaps the edge of the image, some kernel positions fall outside the image boundary. Zero-padding treats these out-of-bounds pixels as having a value of zero \parencite{gonzalezDigitalImageProcessing2018,szeliskiComputerVisionAlgorithms2022}. In the implementation, this is handled with bounds checking:
+
+\begin{lstlisting}[caption={Zero-padding boundary handling}, style=cppCode]
+if (ix < 0 || ix >= width) continue;   // skip: contributes 0
+if (iy < 0 || iy >= height) continue;
+\end{lstlisting}
+
+This is the simplest boundary handling strategy and preserves the output image dimensions (the output is the same size as the input).
+
+\section{Common Filters}
+\label{sec:common-filters}
+
+The project implements several standard convolution filters \parencite{gonzalezDigitalImageProcessing2018}, summarized in Table~\ref{tab:filters}.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{llp{0.5\textwidth}}
+\toprule
+\textbf{Filter} & \textbf{Sizes} & \textbf{Purpose} \\
+\midrule
+Gaussian & $3\times3$, $5\times5$, $7\times7$ & Smoothing / noise reduction \parencite{gonzalezDigitalImageProcessing2018} \\
+Sobel X / Y & $3\times3$ & Edge detection (gradient) \parencite{sobelIsotropicGradientOperator1968,gonzalezDigitalImageProcessing2018} \\
+Laplacian & $3\times3$ & Edge detection (2nd-order) \parencite{marrTheoryEdgeDetection1980,gonzalezDigitalImageProcessing2018} \\
+Box Blur & $3\times3$, $5\times5$ & Uniform smoothing (equal weights) \\
+Sharpen & $3\times3$ & Edge enhancement \\
+Emboss & $3\times3$ & Relief / emboss visual effect \\
+Identity & any odd & Pass-through (correctness testing) \\
+\bottomrule
+\end{tabular}
+\caption{Convolution filters implemented in the project}
+\label{tab:filters}
+\end{table}
+
+As an example, the $3\times3$ Gaussian kernel weights the center pixel most heavily and gradually decreases influence outward:
+
+\begin{equation}
+K_{\text{Gaussian}} = \frac{1}{16}
+\begin{bmatrix}
+1 & 2 & 1 \\
+2 & 4 & 2 \\
+1 & 2 & 1
+\end{bmatrix}
+\label{eq:gaussian-kernel}
+\end{equation}
+
+The Sobel X kernel, originally proposed by \textcite{sobelIsotropicGradientOperator1968} and widely adopted in image processing \parencite{gonzalezDigitalImageProcessing2018}, detects vertical edges by computing horizontal intensity differences:
+
+\begin{equation}
+K_{\text{Sobel X}} =
+\begin{bmatrix}
+-1 & 0 & 1 \\
+-2 & 0 & 2 \\
+-1 & 0 & 1
+\end{bmatrix}
+\label{eq:sobel-kernel}
+\end{equation}
+
+\section{Why Convolution is a Good Parallel Workload}
+\label{sec:convolution-parallelism}
+
+2D convolution is well suited for GPU parallelization for three reasons \parencite{hwuProgrammingMassivelyParallel2023,podlozhnyukImageConvolutionCUDA2007}:
+
+\begin{enumerate}
+    \item \textbf{Data independence:} Each output pixel depends only on a small local neighborhood in the input image. There are no data dependencies between output pixels, making the operation embarrassingly parallel.
+
+    \item \textbf{Regular access patterns:} The kernel slides across the image in a predictable pattern, producing regular, structured memory accesses that are amenable to coalescing and tiling.
+
+    \item \textbf{Scalable arithmetic intensity:} The number of operations per pixel scales as $O(K^2)$ with kernel size $K$. Larger kernels increase the computation-to-memory ratio, shifting the workload from memory-bound toward compute-bound, which is favorable for GPU execution.
+\end{enumerate}

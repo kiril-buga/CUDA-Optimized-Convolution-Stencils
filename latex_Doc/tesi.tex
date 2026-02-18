@@ -1,0 +1,102 @@
+\documentclass{unicam_thesis}
+\usepackage[utf8]{inputenc}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{xcolor}
+\usepackage{placeins}
+
+% CUDA listing style
+\lstdefinestyle{cudaCode}{
+  language=C++,
+  frame=tbrl,
+  basicstyle=\scriptsize\ttfamily,
+  keywordstyle=\ttfamily\bfseries\color{blue!70!black},
+  stringstyle=\color{red!60!black},
+  commentstyle=\itshape\color{green!50!black},
+  flexiblecolumns=true,
+  captionpos=b,
+  abovecaptionskip=10pt,
+  belowcaptionskip=0pt,
+  numbers=left,
+  numberstyle=\tiny,
+  numbersep=5pt,
+  breaklines=true,
+  showstringspaces=false,
+  morekeywords={__global__, __device__, __host__, __shared__, __constant__,
+    __restrict__, __syncthreads, dim3, blockIdx, blockDim, threadIdx, gridDim,
+    cudaMemcpy, cudaMemcpyToSymbol, cudaMemcpyHostToDevice, cudaMemcpyDeviceToHost,
+    cudaMalloc, cudaFree, cudaEventRecord, cudaEventSynchronize, cudaEventElapsedTime,
+    float, int, extern},
+}
+
+\lstdefinestyle{cppCode}{
+  language=C++,
+  frame=tbrl,
+  basicstyle=\scriptsize\ttfamily,
+  keywordstyle=\ttfamily\bfseries,
+  stringstyle=\itshape,
+  commentstyle=\itshape\color{green!50!black},
+  flexiblecolumns=true,
+  captionpos=b,
+  abovecaptionskip=10pt,
+  belowcaptionskip=0pt,
+  numbers=left,
+  numberstyle=\tiny,
+  numbersep=5pt,
+  breaklines=true,
+  showstringspaces=false,
+}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% TESI DATI FRONTESPIZIO
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\title{CUDA-Optimized 2D Convolution: \\ A Study in GPU Parallel Computing}
+
+\university{Universit\`a degli Studi di Camerino}%
+\school{Scienze e Tecnologie}%
+\course{Parallel and Distributed Computing}%
+
+\author{Kiril Buga, Yannick Schmid}%
+\advisor{Andrea Polini}%
+\coadvisor2{Ahmend Umair}%
+\academicyear{2025/2026}%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% FINE DATI FRONTESPIZIO
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\theoremstyle{definition} \newtheorem{esempio}{Esempio}[chapter]
+\theoremstyle{definition}
+\newtheorem{definizione}{Definizione}[chapter] \theoremstyle{plain}
+\newtheorem{teorema}{Teorema}[chapter]
+
+\graphicspath{{Screenshot/},{Immagini/},{API/},{Source/}}
+\bibliography{biblio.bib}
+
+\let\cleardoublepage\clearpage
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+
+\input{introduzione}
+\input{chapter2_parallel}
+\input{chapter3_imgproc}
+\input{chapter4_methodology}
+\input{chapter5_results}
+\input{chapter6_conclusion}
+\lstlistoflistings
+\listoftables
+\printbibliography
+
+\printindex
+
+
+\end{document}

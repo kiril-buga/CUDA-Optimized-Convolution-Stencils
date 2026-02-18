@@ -1,0 +1,42 @@
+\chapter{Conclusion}
+\label{chap:conclusion}
+
+\section{Summary of Findings}
+\label{sec:summary}
+
+This project implemented and benchmarked three progressively optimized CUDA kernels for 2D image convolution on two GPUs: an NVIDIA GeForce GTX 1050 Ti (Pascal, 768 cores, 6 SMs) and an NVIDIA Tesla T4 (Turing, 2560 cores, 40 SMs):
+
+\begin{itemize}
+    \item All three GPU kernels (V1, V1\_const, V2) produce bit-identical output to the CPU baseline across all tested filter configurations on both platforms, confirming correctness.
+    \item The naive GPU kernel (V1) achieves $54$--$59\times$ speedup over the CPU on the GTX 1050 Ti and up to $148\times$ on the T4 for Gaussian $3\times3$ convolution, demonstrating how GPU parallelism scales with hardware resources.
+    \item Constant memory caching (V1\_const) provides a consistent 5--12\% improvement over V1 on the GTX 1050 Ti and up to 27\% on the T4 for larger kernels, making it a low-effort, high-value optimization across architectures.
+    \item Shared memory tiling (V2) provides substantial benefit for larger kernels on both GPUs: $1.90\times$ faster than V1 at $7\times7$ on the GTX 1050 Ti and $1.32\times$ on the T4. The smaller relative gain on the T4 indicates that improved cache hierarchies in newer architectures partially compensate for V1's redundant memory reads, though V2 remains beneficial.
+    \item The $32\times8$ block configuration is optimal for V2 on both platforms, combining warp-aligned memory coalescing with low shared memory footprint to maximize SM occupancy.
+\end{itemize}
+
+\section{Lessons Learned}
+\label{sec:lessons}
+
+\begin{itemize}
+    \item \textbf{Memory hierarchy matters more than raw parallelism.} The V1 kernel already uses thousands of threads, but its performance is limited by global memory bandwidth. V2's shared memory tiling provides substantial improvement for larger kernels by exploiting data locality, without launching more threads.
+
+    \item \textbf{Small optimizations compound.} V1\_const demonstrates that even a simple change---moving filter weights to constant memory---yields a consistent 5--12\% speedup. In production workloads where convolution is applied repeatedly, these gains are significant.
+
+    \item \textbf{Shared memory tiling has a crossover point.} Tiling introduces overhead (cooperative loading, synchronization barriers, shared memory allocation). For small kernels like $3\times3$, this overhead exceeds the data reuse benefit on both GPUs. The optimization becomes worthwhile starting at $5\times5$ kernels, and its advantage grows with kernel size. However, the relative benefit is architecture-dependent: V2's advantage over V1 is larger on the GTX 1050 Ti ($1.90\times$ at $7\times7$) than on the T4 ($1.32\times$), because newer architectures' improved caches partially mitigate V1's redundant memory accesses.
+
+    \item \textbf{Block shape matters as much as block size.} A $32\times8$ block and a $16\times16$ block have the same number of threads (256), but the 32-wide block aligns with warp boundaries for coalesced memory access, resulting in measurably better performance.
+
+    \item \textbf{Template metaprogramming enables zero-cost abstraction on GPUs.} By making kernel size a template parameter, the compiler can fully unroll convolution loops and compute halo sizes at compile time, producing optimal code for each configuration.
+\end{itemize}
+
+\section{Future Work}
+\label{sec:future-work}
+
+\begin{itemize}
+    \item \textbf{Kernel fusion:} Implement a fused Gaussian+Sobel edge detection kernel with shared memory tiling to demonstrate the combined benefit of reducing kernel launches and optimizing memory access.
+    \item \textbf{Multi-GPU support:} Distribute convolution across multiple GPUs using domain decomposition with halo overlap and CUDA streams for concurrent execution.
+    \item \textbf{Separable filter decomposition:} Gaussian filters are separable, meaning a 2D $K \times K$ convolution can be decomposed into two 1D passes (one horizontal, one vertical) with $O(2K)$ operations instead of $O(K^2)$. This could significantly accelerate $5\times5$ and $7\times7$ Gaussian filters.
+    \item \textbf{Half-precision arithmetic:} Explore FP16 computation on architectures that support it (Volta and newer) to potentially double throughput for applications that tolerate reduced precision.
+    \item \textbf{Profiling with NVIDIA Nsight Compute:} Use hardware performance counters to measure achieved memory bandwidth, occupancy, warp efficiency, and shared memory bank conflicts, providing deeper insight into kernel bottlenecks.
+    \item \textbf{Benchmark on newer architectures:} Test on Ampere (RTX 3000), Ada (RTX 4000), or Hopper GPUs to observe the impact of larger shared memory, higher bandwidth, and architectural improvements.
+\end{itemize}
