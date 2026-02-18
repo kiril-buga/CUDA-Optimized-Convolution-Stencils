@@ -1,0 +1,25 @@
+\chapter{Introduction}
+\label{chap:intro}
+
+\section{Motivation}
+\label{sec:motivation}
+
+Modern image processing and computer vision workloads involve applying the same mathematical operation to millions of pixels. A 4K image contains over 8 million pixels, and even a simple $3\times3$ filter requires 9 multiply-accumulate operations per pixel, totaling over 75 million floating-point operations for a single pass. On a conventional CPU, these operations execute sequentially, making large-scale image processing slow and impractical for real-time applications.
+
+Graphics Processing Units (GPUs) offer a fundamentally different computing model. Where a CPU optimizes for single-thread latency with a handful of powerful cores, a GPU provides thousands of lightweight cores optimized for throughput. 2D convolution is an ideal candidate for GPU acceleration because every output pixel can be computed independently, making it an embarrassingly parallel workload. This project explores how to systematically exploit this parallelism using NVIDIA's CUDA platform, progressing from a naive implementation to increasingly optimized versions that leverage the GPU's memory hierarchy and execution model.
+
+\section{Objectives}
+\label{sec:objectives}
+
+The objectives of this project are:
+\begin{itemize}
+    \item Implement a correct sequential CPU baseline for 2D convolution with zero-padding boundary handling.
+    \item Develop three progressively optimized CUDA kernels: a naive global memory version (V1), a constant memory version (V1\_const), and a shared memory tiled version (V2).
+    \item Benchmark performance across three dimensions: image size, filter kernel size, and thread block configuration.
+    \item Verify the correctness of all GPU implementations against the CPU reference using quantitative error metrics.
+\end{itemize}
+
+\section{Report Organization}
+\label{sec:organization}
+
+Chapter~\ref{chap:parallel} introduces the parallel computing concepts that underpin GPU programming, covering architecture, memory hierarchy, and optimization techniques. Chapter~\ref{chap:imgproc} provides a concise overview of the image processing operations used as the computational workload. Chapter~\ref{chap:methodology} describes the project's implementation and benchmarking methodology in detail. Chapter~\ref{chap:results} presents the experimental results, and Chapter~\ref{chap:conclusion} concludes with findings and future work.

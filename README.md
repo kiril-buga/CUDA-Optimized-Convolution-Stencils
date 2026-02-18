@@ -78,11 +78,11 @@ Defined in `filters.cpp`.
 
 ## Benchmarks
 
-Results below are from an **NVIDIA GeForce GTX 1050 Ti** (6 SMs, 112 GB/s peak bandwidth). Run the benchmark on your own GPU to get updated numbers.
+Results are from two GPUs. Run the benchmark on your own GPU to get updated numbers.
 
 ### Correctness
 
-All GPU kernels produce bit-identical output to the CPU baseline (max error = 0.00):
+All GPU kernels produce bit-identical output to the CPU baseline (max error = 0.00) on both platforms:
 
 | Filter | V1 | V1_const | V2 |
 |--------|----|----|-----|
@@ -93,6 +93,8 @@ All GPU kernels produce bit-identical output to the CPU baseline (max error = 0.
 
 ### Image Size Sweep (Gaussian 3x3)
 
+**GTX 1050 Ti (Pascal, 6 SMs, 112 GB/s)**
+
 | Size | CPU (ms) | V1 (ms) | V1c (ms) | V2 (ms) | Speedup V1 | Speedup V2 |
 |------|----------|---------|----------|---------|------------|------------|
 | 256x256 | 1.00 | 0.017 | 0.020 | 0.030 | 59x | 34x |
@@ -101,9 +103,21 @@ All GPU kernels produce bit-identical output to the CPU baseline (max error = 0.
 | 2048x2048 | 65.99 | 1.132 | 1.047 | 1.519 | 58x | 43x |
 | 4096x4096 | 265.23 | 4.500 | 4.176 | 5.819 | 59x | 46x |
 
-V2 speedup over CPU grows with image size because larger images keep the GPU busier (better occupancy). For small kernels like 3x3, V2's shared memory overhead exceeds the benefit — V1_const is faster. V2 shines with larger kernels (see below).
+**Tesla T4 (Turing, 40 SMs, 320 GB/s)**
+
+| Size | CPU (ms) | V1 (ms) | V1c (ms) | V2 (ms) | Speedup V1 | Speedup V2 |
+|------|----------|---------|----------|---------|------------|------------|
+| 256x256 | 0.90 | 0.014 | 0.017 | 0.020 | 64x | 44x |
+| 512x512 | 3.58 | 0.033 | 0.033 | 0.044 | 110x | 81x |
+| 1024x1024 | 14.66 | 0.102 | 0.100 | 0.123 | 143x | 120x |
+| 2048x2048 | 60.01 | 0.407 | 0.383 | 0.470 | 148x | 128x |
+| 4096x4096 | 257.72 | 1.853 | 1.707 | 2.158 | 139x | 119x |
+
+V2 speedup over CPU grows with image size because larger images keep the GPU busier (better occupancy). For small kernels like 3x3, V2's shared memory overhead exceeds the benefit — V1_const is faster. V2 shines with larger kernels (see below). The T4 achieves up to 148x speedup vs 59x on the GTX 1050 Ti, thanks to 6.7x more SMs and 2.9x higher bandwidth.
 
 ### Kernel Size Sweep (1024x1024 image)
+
+**GTX 1050 Ti**
 
 | Kernel | CPU (ms) | V1 (ms) | V1c (ms) | V2 (ms) | V2/V1 |
 |--------|----------|---------|----------|---------|-------|
@@ -111,9 +125,19 @@ V2 speedup over CPU grows with image size because larger images keep the GPU bus
 | 5x5 | 35.73 | 0.600 | 0.556 | 0.402 | 1.49x |
 | 7x7 | 67.68 | 0.968 | 0.862 | 0.510 | 1.90x |
 
-For 3x3, the shared memory tiling overhead outweighs the benefit (only 9 neighbor reads per pixel). Starting at 5x5, V2 pulls ahead, and at 7x7 it's nearly 2x faster than V1. V1_const consistently outperforms V1 by 5-12%, showing that even just caching kernel weights in constant memory helps.
+**Tesla T4**
+
+| Kernel | CPU (ms) | V1 (ms) | V1c (ms) | V2 (ms) | V2/V1 |
+|--------|----------|---------|----------|---------|-------|
+| 3x3 | 16.97 | 0.122 | 0.116 | 0.147 | 0.83x |
+| 5x5 | 34.99 | 0.249 | 0.216 | 0.222 | 1.12x |
+| 7x7 | 66.66 | 0.463 | 0.338 | 0.350 | 1.32x |
+
+For 3x3, the shared memory tiling overhead outweighs the benefit (only 9 neighbor reads per pixel). Starting at 5x5, V2 pulls ahead, and at 7x7 it's 1.90x faster than V1 on the GTX 1050 Ti and 1.32x on the T4. V2's relative gain is smaller on the T4 because its improved caches reduce V1's penalty. V1_const consistently outperforms V1 by 5-27%.
 
 ### Block Size Sweep (2048x2048, Gaussian 5x5)
+
+**GTX 1050 Ti**
 
 | Block | Threads | V1 (ms) | V1c (ms) | V2 (ms) | V2/V1 |
 |-------|---------|---------|----------|---------|-------|
@@ -123,11 +147,21 @@ For 3x3, the shared memory tiling overhead outweighs the benefit (only 9 neighbo
 | 32x16 | 512 | 2.265 | 2.063 | 1.870 | 1.21x |
 | 32x32 | 1024 | 2.303 | 2.100 | 2.043 | 1.13x |
 
+**Tesla T4**
+
+| Block | Threads | V1 (ms) | V1c (ms) | V2 (ms) | V2/V1 |
+|-------|---------|---------|----------|---------|-------|
+| 8x8 | 64 | 1.545 | 1.277 | 0.866 | 1.78x |
+| 16x16 | 256 | 0.980 | 0.849 | 0.846 | 1.16x |
+| 32x8 | 256 | 0.855 | 0.821 | 0.688 | 1.24x |
+| 32x16 | 512 | 0.903 | 0.861 | 0.789 | 1.14x |
+| 32x32 | 1024 | 0.973 | 0.886 | 0.898 | 1.08x |
+
 Key observations:
-- **32x8 is the fastest V2 config** — 32 threads wide means every warp accesses contiguous memory (perfect coalescing), and the small tile height keeps shared memory usage low, allowing more concurrent blocks per SM.
+- **32x8 is the fastest V2 config on both GPUs** — 32 threads wide means every warp accesses contiguous memory (perfect coalescing), and the small tile height keeps shared memory usage low, allowing more concurrent blocks per SM.
 - **8x8 blocks (64 threads):** Only 2 warps per block — not enough to hide memory latency, resulting in the worst V1 performance.
 - **32x32 blocks (1024 threads):** Maximum threads per block, but the large shared memory tile ((32+4)x(32+4) = 1296 floats for 5x5) limits concurrent blocks per SM, making V2 barely faster than V1.
-- **V1 is less sensitive to block shape** because it has no shared memory — the main factor is occupancy and coalescing.
+- **The T4 is more sensitive to block shape** for V1 (1.8x spread vs 1.13x on GTX 1050 Ti), suggesting its larger SM count amplifies the occupancy penalty of suboptimal block sizes.
 
 ## Project Structure
 

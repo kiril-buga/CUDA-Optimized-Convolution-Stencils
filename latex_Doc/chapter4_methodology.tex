@@ -1,0 +1,152 @@
+\chapter{Project Methodology and Implementation}
+\label{chap:methodology}
+
+\section{Project Structure and Build System}
+\label{sec:project-structure}
+
+The project is organized into modular source files with clear separation of concerns:
+
+\begin{lstlisting}[caption={Project directory structure}, style=cppCode]
+src/
+  main.cpp                  Benchmark harness, correctness tests, timing
+  cpu_convolution.cpp / .h  Sequential CPU reference implementation
+  cuda_convolution.cu / .cuh GPU kernels (V1, V1_const, V2)
+  filters.cpp / .h          Filter coefficient definitions
+  image_utils.h             Synthetic image generators and error metrics
+Makefile                    Build configuration
+\end{lstlisting}
+
+The Makefile supports two build modes:
+
+\begin{itemize}
+    \item \textbf{Full CUDA build} (\texttt{make all}): compiles both CPU and GPU code using \texttt{g++} (C++20) for host code and \texttt{nvcc} (C++17) for CUDA device code. The target GPU architecture is configurable via \texttt{CUDA\_ARCH} (default: 75 for Turing).
+    \item \textbf{CPU-only build} (\texttt{make cpu\_only}): compiles only the CPU code with the \texttt{-DCPU\_ONLY} preprocessor flag, which conditionally excludes all CUDA code. This allows the project to build and run correctness tests on machines without an NVIDIA GPU.
+\end{itemize}
+
+\section{CPU Baseline}
+\label{sec:cpu-baseline}
+
+The CPU implementation serves as the correctness reference against which all GPU versions are validated. It uses a straightforward four-level nested loop: for each output pixel $(x, y)$, iterate over all kernel positions $(k_x, k_y)$, accumulate the product of the input pixel and the corresponding kernel weight, and write the result to the output:
+
+\begin{lstlisting}[caption={CPU baseline convolution implementation}, style=cppCode]
+for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+        float acc = 0.0f;
+        for (int ky = -half_k; ky <= half_k; ++ky) {
+            for (int kx = -half_k; kx <= half_k; ++kx) {
+                // bounds check + accumulate
+                acc += input[iy * width + ix]
+                     * kernel[kernel_idx];
+            }
+        }
+        output[y * width + x] = acc;
+    }
+}
+\end{lstlisting}
+
+The implementation supports arbitrary odd-sized kernels ($3\times3$, $5\times5$, $7\times7$) and validates input dimensions at runtime. Out-of-bounds kernel positions are skipped (zero-padding).
+
+\section{GPU V1: Naive Global Memory Kernel}
+\label{sec:gpu-v1}
+
+The first GPU implementation maps one thread to each output pixel. Each thread computes the full convolution independently by reading all required input values directly from global memory:
+
+\begin{lstlisting}[caption={V1 naive global memory kernel}, style=cudaCode]
+__global__ void conv2d_kernel_v1(
+    const float* __restrict__ input,
+    float* __restrict__ output,
+    int width, int height,
+    const float* __restrict__ kernel,
+    int kernel_size
+) {
+    const int x = blockIdx.x * blockDim.x + threadIdx.x;
+    const int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    float acc = 0.0f;
+    for (int ky = -half_k; ky <= half_k; ++ky)
+        for (int kx = -half_k; kx <= half_k; ++kx)
+            acc += input[(y+ky)*width + (x+kx)]
+                 * kernel[...];
+
+    output[y * width + x] = acc;
+}
+\end{lstlisting}
+
+The \texttt{\_\_restrict\_\_} qualifier tells the compiler that the \texttt{input}, \texttt{output}, and \texttt{kernel} pointers do not alias each other, enabling more aggressive optimizations. Threads that map outside the image bounds exit early.
+
+V1 serves as the baseline for measuring the impact of each subsequent optimization. Its primary limitation is excessive global memory traffic: for a $3\times3$ kernel, each thread performs 9 global memory reads for both input pixels and filter weights. Adjacent threads read heavily overlapping neighborhoods, but this overlap is not exploited.
+
+\section{GPU V1\_const: Constant Memory Kernel}
+\label{sec:gpu-v1-const}
+
+V1\_const is structurally identical to V1---one thread per pixel, no shared memory---but reads filter weights from \texttt{\_\_constant\_\_} memory instead of global memory. The filter is copied to the device's constant memory before kernel launch using \texttt{cudaMemcpyToSymbol()}.
+
+Because all threads in a warp access the same filter weight at each step (the kernel index depends only on the loop iteration, not the thread ID), constant memory's broadcast mechanism serves all 32 threads from a single cached read. This eliminates redundant global memory traffic for the filter weights while keeping the implementation simple.
+
+V1\_const isolates the performance contribution of constant memory caching, providing a data point between the fully naive V1 and the shared memory tiled V2.
+
+\section{GPU V2: Shared Memory Tiled Kernel}
+\label{sec:gpu-v2}
+
+V2 addresses V1's redundant memory accesses through shared memory tiling (described in Section~\ref{sec:tiling}). The algorithm proceeds in two phases:
+
+\textbf{Phase 1---Cooperative Loading:} All threads in the block collaboratively load the tile (including halo) from global memory into shared memory. Each thread may load multiple elements to cover the shared memory region, which is larger than the block.
+
+\textbf{Phase 2---Computation:} After synchronizing with \texttt{\_\_syncthreads()}, each thread computes its output pixel by reading only from shared memory (for image data) and constant memory (for filter coefficients). The convolution loops are annotated with \texttt{\#pragma unroll} for compile-time unrolling.
+
+The kernel is templated on \texttt{KERNEL\_SIZE}, making convolution loop bounds and halo sizes compile-time constants. Shared memory is allocated dynamically (\texttt{extern \_\_shared\_\_}), with tile dimensions computed at runtime from the block configuration. The wrapper function dispatches to the correct template instantiation (kernel sizes 3, 5, or 7) and falls back to V1 for unsupported sizes.
+
+\section{Benchmarking Methodology}
+\label{sec:benchmarking}
+
+Performance is measured differently for CPU and GPU to account for their distinct execution models:
+
+\begin{itemize}
+    \item \textbf{CPU timing:} Uses \texttt{std::chrono::high\_resolution\_clock} to measure wall-clock time. Each benchmark is averaged over 3 iterations.
+    \item \textbf{GPU timing:} Uses CUDA events (\texttt{cudaEventRecord} / \texttt{cudaEventElapsedTime}), which measure time on the GPU's internal clock. This avoids including CPU-side overhead in the measurement. Each benchmark includes 1 warmup iteration (to prime caches and initialize the GPU driver), followed by 10 timed iterations. Results are averaged.
+\end{itemize}
+
+The \texttt{CudaTimer} class encapsulates GPU timing:
+
+\begin{lstlisting}[caption={CudaTimer class for GPU timing}, style=cudaCode]
+class CudaTimer {
+    void start() { cudaEventRecord(start_); }
+    void stop()  { cudaEventRecord(stop_);
+                   cudaEventSynchronize(stop_); }
+    float elapsed_ms() const {
+        float ms;
+        cudaEventElapsedTime(&ms, start_, stop_);
+        return ms;
+    }
+};
+\end{lstlisting}
+
+All benchmarks use synthetic random noise images generated with a fixed seed (42) for reproducibility. Speedup is computed as $\text{CPU\_time} / \text{GPU\_time}$.
+
+The benchmarks sweep three dimensions:
+
+\begin{enumerate}
+    \item \textbf{Image size:} $256\times256$ to $4096\times4096$ (Gaussian $3\times3$, $16\times16$ blocks)
+    \item \textbf{Kernel size:} $3\times3$, $5\times5$, $7\times7$ ($1024\times1024$ image, $16\times16$ blocks)
+    \item \textbf{Block configuration:} $8\times8$, $16\times16$, $32\times8$, $32\times16$, $32\times32$ ($2048\times2048$ image, Gaussian $5\times5$)
+\end{enumerate}
+
+\section{Correctness Verification}
+\label{sec:correctness}
+
+Correctness is established by comparing GPU outputs against the CPU reference output using the maximum absolute error metric:
+
+\begin{lstlisting}[caption={Maximum absolute error computation}, style=cppCode]
+float max_abs_error(const vector<float>& a,
+                    const vector<float>& b) {
+    float max_err = 0.0f;
+    for (size_t i = 0; i < a.size(); ++i)
+        max_err = max(max_err, abs(a[i] - b[i]));
+    return max_err;
+}
+\end{lstlisting}
+
+A $64\times64$ checkerboard test image is convolved with each filter on both CPU and GPU. The test passes if the maximum absolute error is below $10^{-5}$ for all three GPU kernels (V1, V1\_const, V2).
+
+Seven filter configurations are tested: Gaussian $3\times3$/$5\times5$/$7\times7$, Sobel X $3\times3$, Laplacian $3\times3$, and Box Blur $3\times3$/$5\times5$.

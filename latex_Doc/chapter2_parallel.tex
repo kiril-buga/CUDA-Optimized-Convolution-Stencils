@@ -1,0 +1,175 @@
+\chapter{Background: Parallel Computing}
+\label{chap:parallel}
+
+\section{Why Parallelism?}
+\label{sec:why-parallelism}
+
+The traditional CPU architecture is built around a small number of powerful cores (typically 4--16), each equipped with deep pipelines, branch predictors, and large multi-level caches \parencite{hennessyComputerArchitectureQuantitative2017}. This design minimizes the latency of individual operations, making CPUs excellent for sequential, control-flow-heavy workloads. However, when the same operation must be applied to millions of independent data elements, the CPU's per-core performance advantage becomes irrelevant---what matters is throughput.
+
+A GPU inverts this trade-off. Instead of a few complex cores, a GPU contains hundreds or thousands of simpler cores grouped into processing units called Streaming Multiprocessors (SMs) \parencite{lindholmNVIDIATeslaUnified2008}. Each core lacks the sophisticated control logic of a CPU core, but the sheer number of cores enables massive data parallelism. The GPU model assumes that if one thread stalls (e.g., waiting for a memory access), another thread is ready to execute immediately, keeping the hardware busy. This is known as latency hiding through occupancy \parencite{hwuProgrammingMassivelyParallel2023}.
+
+Amdahl's Law provides the theoretical framework for understanding parallelization gains \parencite{amdahlValiditySingleProcessor1967}. If a fraction $p$ of a program is parallelizable and the remaining fraction $(1 - p)$ is inherently sequential, the maximum speedup with $N$ processors is:
+
+\begin{equation}
+\text{Speedup} = \frac{1}{(1 - p) + \frac{p}{N}}
+\label{eq:amdahl}
+\end{equation}
+
+For 2D convolution, the parallel fraction is extremely high: every output pixel is computed independently from its local neighborhood in the input image. The only sequential components are memory allocation, data transfer between host (CPU) and device (GPU), and result collection. This makes convolution an ideal workload for GPU acceleration, with theoretical speedups approaching the ratio of GPU-to-CPU computational throughput.
+
+\section{GPU Architecture Fundamentals}
+\label{sec:gpu-arch}
+
+\subsection{Streaming Multiprocessors and CUDA Cores}
+\label{sec:sm-cuda-cores}
+
+An NVIDIA GPU is organized as an array of Streaming Multiprocessors (SMs) \parencite{lindholmNVIDIATeslaUnified2008,nvidiaCUDAProgrammingGuide2024}. Each SM is an independent processing unit containing multiple CUDA cores (also called shader processors), a register file, shared memory, and scheduling logic. This project benchmarks on two GPUs: the NVIDIA GeForce GTX 1050 Ti (Pascal, compute capability 6.1) with 6 SMs and 768 CUDA cores, and the NVIDIA Tesla T4 (Turing, compute capability 7.5) with 40 SMs and 2560 CUDA cores.
+
+When a CUDA kernel is launched, the GPU scheduler distributes thread blocks across the available SMs. Each thread block runs entirely on a single SM and cannot migrate to another. An SM can host multiple thread blocks concurrently, limited by the SM's resources (registers, shared memory, and maximum thread count). This block-to-SM mapping is the fundamental unit of work distribution on the GPU \parencite{nickollsScalableParallelProgramming2008}.
+
+\subsection{Thread Hierarchy: Threads, Warps, Blocks, and Grids}
+\label{sec:thread-hierarchy}
+
+CUDA organizes parallel execution in a four-level hierarchy \parencite{nvidiaCUDAProgrammingGuide2024,nickollsScalableParallelProgramming2008}:
+
+\begin{itemize}
+    \item \textbf{Thread:} The smallest unit of execution. Each thread has a unique ID within its block (\texttt{threadIdx.x}, \texttt{threadIdx.y}) and runs the same kernel code on different data. In this project, each thread typically computes one output pixel.
+
+    \item \textbf{Warp:} A group of 32 threads that execute in lockstep using Single Instruction, Multiple Threads (SIMT) execution \parencite{lindholmNVIDIATeslaUnified2008}. All threads in a warp execute the same instruction at the same time. If threads in a warp take different branches (warp divergence), both paths are serialized, reducing efficiency. The warp is the fundamental scheduling unit on the GPU.
+
+    \item \textbf{Thread Block:} A programmer-defined grouping of threads (e.g., $16\times16 = 256$ threads, or $32\times8 = 256$ threads). Threads within a block can cooperate through shared memory and synchronize with barriers. Blocks are assigned to SMs and execute independently of other blocks.
+
+    \item \textbf{Grid:} The collection of all thread blocks needed to process the entire input. For a $1024\times1024$ image with $16\times16$ thread blocks, the grid is $64\times64 = 4{,}096$ blocks, each containing 256 threads, for a total of over one million threads.
+\end{itemize}
+
+In the project's code, the grid and block dimensions are computed as:
+
+\begin{lstlisting}[caption={Grid and block dimension computation}, style=cudaCode]
+dim3 block(block_x, block_y);
+dim3 grid((width + block_x - 1) / block_x,
+          (height + block_y - 1) / block_y);
+\end{lstlisting}
+
+This ceiling-division formula ensures the grid covers the entire image, even when dimensions are not evenly divisible by the block size. Threads that map to positions outside the image boundaries are deactivated with a bounds check.
+
+\subsection{Memory Hierarchy}
+\label{sec:memory-hierarchy}
+
+The GPU memory hierarchy is central to understanding performance optimization \parencite{hwuProgrammingMassivelyParallel2023,nvidiaCUDAProgrammingGuide2024}. Each level trades capacity for speed:
+
+\begin{itemize}
+    \item \textbf{Registers:} The fastest storage, private to each thread. Variables like loop counters and accumulators reside in registers. Access latency is approximately 1 clock cycle \parencite{jiaDissectingNVIDIAVolta2018}. Both GPUs used in this project provide 65,536 32-bit registers per SM.
+
+    \item \textbf{Shared Memory:} A fast, programmer-managed memory space shared by all threads in a block. It acts as a software-controlled cache. Access latency is roughly 5--10 cycles, making it approximately $100\times$ faster than global memory \parencite{hwuProgrammingMassivelyParallel2023,jiaDissectingNVIDIAVolta2018}. The GTX 1050 Ti provides 48~KB of shared memory per SM, while the T4 provides up to 64~KB. This is the key resource exploited by the V2 tiled convolution kernel.
+
+    \item \textbf{Constant Memory:} A 64~KB read-only memory space, cached on each SM. When all threads in a warp read the same address, the value is broadcast to all threads in a single transaction \parencite{nvidiaCUDAProgrammingGuide2024}. This makes it ideal for small, read-only data accessed uniformly, such as convolution filter coefficients. This is the key resource exploited by the V1\_const kernel and also used by V2.
+
+    \item \textbf{Global Memory:} The largest memory space, accessible by all threads across all SMs. It has the highest latency (400--600 clock cycles). The GTX 1050 Ti has 4~GB at 112~GB/s peak bandwidth, while the T4 has 16~GB at 320~GB/s \parencite{jiaDissectingNVIDIAVolta2018}. The input and output image arrays reside in global memory. Efficient use of global memory requires coalesced access patterns (see Section~\ref{sec:coalescing}).
+\end{itemize}
+
+\section{Key Optimization Techniques}
+\label{sec:optimization}
+
+\subsection{Memory Coalescing}
+\label{sec:coalescing}
+
+When threads in a warp access contiguous addresses in global memory, the hardware combines these individual requests into a single wide memory transaction (typically 128 bytes). This is called memory coalescing and is critical for achieving high bandwidth utilization \parencite{nvidiaCUDAProgrammingGuide2024,ryooOptimizationPrinciplesApplication2008}. Conversely, scattered or strided access patterns result in multiple separate transactions, wasting bandwidth.
+
+In 2D image processing, images are stored in row-major order: \texttt{pixel = image[y * width + x]}. When the block's x-dimension equals the warp size (32), threads in the same warp process adjacent pixels in the same row, resulting in perfectly coalesced reads. This is why the benchmarks test a $32\times8$ block configuration, which has the same total thread count (256) as $16\times16$ but aligns each row of threads with a full warp.
+
+\subsection{Tiling and Shared Memory}
+\label{sec:tiling}
+
+The naive convolution kernel (V1) has a fundamental inefficiency: each thread reads its pixel's entire neighborhood from global memory independently. For a $3\times3$ kernel, neighboring threads share 6 of their 9 input pixels, but each thread fetches all 9 from global memory. For larger kernels, this redundancy grows rapidly.
+
+Shared memory tiling solves this problem \parencite{hwuProgrammingMassivelyParallel2023,micikevicius3DFiniteDifference2009}. The idea is to cooperatively load a tile of input data, including a boundary region called the halo, into shared memory once. Then all threads in the block compute their output pixels by reading from the fast shared memory instead of slow global memory \parencite{podlozhnyukImageConvolutionCUDA2007}.
+
+The tile dimensions include the halo:
+
+\begin{equation}
+\begin{aligned}
+\texttt{SHARED\_W} &= \texttt{TILE\_W} + 2 \times \texttt{HALF\_K} \\
+\texttt{SHARED\_H} &= \texttt{TILE\_H} + 2 \times \texttt{HALF\_K}
+\end{aligned}
+\label{eq:tile-dims}
+\end{equation}
+
+where $\texttt{TILE\_W} \times \texttt{TILE\_H}$ is the output region (matching the block dimensions) and $\texttt{HALF\_K} = \lfloor\texttt{kernel\_size} / 2\rfloor$ is the halo width on each side. For a $16\times16$ block with a $3\times3$ kernel, the shared memory tile is $18\times18 = 324$ floats. Each of the 256 threads in the block reads 9 values from shared memory during convolution, yielding a data reuse factor of $(256 \times 9) / 324 \approx 7.1\times$. This means each value loaded from global memory is used approximately 7 times, dramatically reducing bandwidth pressure.
+
+The loading phase may require each thread to load more than one element, since the shared memory tile (e.g., $18\times18 = 324$ elements) is larger than the number of threads in the block (e.g., 256). The code handles this with a nested loop:
+
+\begin{lstlisting}[caption={Cooperative tile loading with multiple loads per thread}, style=cudaCode]
+const int num_loads_x = (SHARED_W + BLOCK_X - 1) / BLOCK_X;
+const int num_loads_y = (SHARED_H + BLOCK_Y - 1) / BLOCK_Y;
+
+for (int ly = 0; ly < num_loads_y; ++ly) {
+    for (int lx = 0; lx < num_loads_x; ++lx) {
+        // Each thread loads tile[shared_y][shared_x]
+        // from global memory
+    }
+}
+\end{lstlisting}
+
+Pixels outside the image boundary are loaded as zero, implementing zero-padding implicitly.
+
+\subsection{Constant Memory for Filter Weights}
+\label{sec:constant-memory}
+
+The convolution filter kernel is a small array (9 to 49 floats for $3\times3$ through $7\times7$ kernels), is read-only during execution, and is accessed with the same index pattern by all threads. These properties make it a textbook use case for constant memory.
+
+In the project, the filter is stored in a \texttt{\_\_constant\_\_} array:
+
+\begin{lstlisting}[caption={Constant memory declaration for filter weights}, style=cudaCode]
+__constant__ float c_kernel[MAX_KERNEL_ELEMENTS];
+\end{lstlisting}
+
+and copied from host memory using \texttt{cudaMemcpyToSymbol()} \parencite{nvidiaCUDAProgrammingGuide2024}. During convolution, all threads in a warp access \texttt{c\_kernel[ky * kernel\_size + kx]} with the same indices at each step, triggering a single cached read that is broadcast to all 32 threads. This eliminates 31 redundant global memory reads per warp per kernel element. The V1\_const kernel exploits this optimization as an intermediate step between the fully naive V1 and the shared memory tiled V2.
+
+\subsection{Template Specialization and Loop Unrolling}
+\label{sec:template-unrolling}
+
+The V2 shared memory kernel is implemented as a C++ template parameterized on \texttt{KERNEL\_SIZE}:
+
+\begin{lstlisting}[caption={Template declaration for V2 kernel}, style=cudaCode]
+template <int KERNEL_SIZE>
+__global__ void conv2d_kernel_v2_shared(...)
+\end{lstlisting}
+
+This allows the compiler to treat halo sizes and convolution loop bounds as compile-time constants. The shared memory is allocated dynamically using \texttt{extern \_\_shared\_\_ float tile[]}, with the tile dimensions (including halo) computed at runtime and passed as kernel launch parameters. The convolution loops are fully unrolled with \texttt{\#pragma unroll}:
+
+\begin{lstlisting}[caption={Unrolled convolution loop in V2 kernel}, style=cudaCode]
+#pragma unroll
+for (int ky = 0; ky < KERNEL_SIZE; ++ky) {
+    #pragma unroll
+    for (int kx = 0; kx < KERNEL_SIZE; ++kx) {
+        acc += tile[(threadIdx.y + ky) * shared_w
+                    + (threadIdx.x + kx)]
+             * c_kernel[ky * KERNEL_SIZE + kx];
+    }
+}
+\end{lstlisting}
+
+Loop unrolling eliminates branch instructions and loop overhead, replacing them with a straight-line sequence of multiply-accumulate operations \parencite{nvidiaCUDAProgrammingGuide2024,volkovBetterPerformanceLower2010}. For a $3\times3$ kernel, this produces 9 inline operations with no loop control overhead. The project instantiates 3 template variants (one per supported kernel size: 3, 5, 7), and a runtime dispatch selects the correct one based on the requested kernel size.
+
+\subsection{Synchronization Barriers}
+\label{sec:sync-barriers}
+
+When threads cooperatively load data into shared memory, all threads must finish loading before any thread begins reading. Without synchronization, a thread could read a shared memory location that has not yet been written by another thread, leading to incorrect results.
+
+CUDA provides the \texttt{\_\_syncthreads()} intrinsic, which acts as a block-level barrier: execution halts until every thread in the block has reached the barrier \parencite{nvidiaCUDAProgrammingGuide2024}. In the V2 kernel, \texttt{\_\_syncthreads()} is placed between the loading phase and the computation phase:
+
+\begin{lstlisting}[caption={Synchronization barrier between load and compute phases}, style=cudaCode]
+// Phase 1: All threads cooperatively load tile
+// into shared memory
+tile[shared_y * shared_w + shared_x] =
+    input[global_y * width + global_x];
+
+__syncthreads();  // Barrier: wait for all loads
+
+// Phase 2: Each thread computes convolution
+// from shared memory
+acc += tile[sy * shared_w + sx]
+     * c_kernel[ky * KERNEL_SIZE + kx];
+\end{lstlisting}
+
+This barrier is block-scoped---it does not synchronize across different blocks. Cross-block synchronization requires separate kernel launches or atomic operations.
