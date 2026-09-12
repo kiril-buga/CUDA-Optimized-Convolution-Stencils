@@ -1,0 +1,5 @@
+# GitHub Linguist overrides, so the language bar reflects source rather
+# than prose. The written report is ~73 KB of typesetting markup, which
+# outweighed the CUDA and C++ it describes and became the reported
+# primary language.
+latex_Doc/** linguist-documentation=true
